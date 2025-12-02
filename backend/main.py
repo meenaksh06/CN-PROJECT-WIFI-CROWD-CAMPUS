@@ -1,11 +1,34 @@
-
-from fastapi import FastAPI, Body
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
-import backend.db as db
+from . import db
 import joblib, os
-from typing import List, Dict
+from typing import List
 
 app = FastAPI()
+
+# ---------------------
+# CORS - allow frontend dev server
+# ---------------------
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # Add other origins if needed, or use ["*"] for quick testing (not recommended for production)
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------
+# DB + model init
+# ---------------------
 db.init_db()
 
 # optionally set MODEL_PATH env var to use ML; else ML disabled
@@ -18,7 +41,8 @@ if MODEL_PATH:
     except Exception as e:
         print("Model load failed:", e)
         model = None
-        
+
+
 @app.post("/ingest")
 async def ingest(batch: List[dict]):
     """
@@ -70,6 +94,15 @@ async def counts():
         results.append({'ap_id': a['ap_id'], 'unique_devices': a['unique_devices'], 'mean_rssi': a['mean_rssi'], 'est_people': est_people})
     return {'data': results}
 
+
+# ---- compatibility alias for frontend ----
+# frontend example code expects GET /predict — provide that endpoint as alias
+@app.get('/predict')
+async def predict_alias():
+    return await counts()
+
+
+# optional info endpoints you can re-enable if needed
 # @app.get("/")
 # def read_root():
 #     return {"status":"ok"}
