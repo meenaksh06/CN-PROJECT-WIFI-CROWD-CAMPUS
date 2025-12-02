@@ -4,6 +4,7 @@ from datetime import datetime
 from . import db
 import joblib, os
 from typing import List
+import random, time, hashlib
 
 app = FastAPI()
 
@@ -49,6 +50,7 @@ async def ingest(batch: List[dict]):
       {"ts": 1730544060, "ap_iface": "AP-2", "device": "device_002", "rssi": -63}
     ]
     """
+    print("hit ingest endpoint with batch size:", len(batch))
     accepted = 0
 
     for p in batch:
@@ -76,6 +78,7 @@ async def ingest(batch: List[dict]):
 
 @app.get('/counts')
 async def counts():
+    print("hit counts endpoint")
     aggs = db.get_current_aggregates()
     results = []
     for a in aggs:
@@ -94,3 +97,64 @@ async def predict_alias():
     return await counts()
 
 
+# optional info endpoints you can re-enable if needed
+# @app.get("/")
+# def read_root():
+#     return {"status":"ok"}
+
+# @app.get("/ingest")
+# def ingest_info():
+#     return {"info": "POST JSON list to this endpoint. Example: [{\"ts\":..., \"ap_iface\":\"AP01\", \"device\":\"dev-1\", \"rssi\":-45}]"}
+
+
+
+AP_IDS = ['AP-101', 'AP-102', 'AP-103', 'AP-104']
+
+def random_mac():
+
+    return hashlib.sha256(os.urandom(16)).hexdigest()[:12]
+
+
+@app.post("/simulate")
+async def simulate(rows: int = 500):
+
+    print(f"Simulating {rows} probe rows...")
+
+    batch = []
+    now = time.time()
+
+    for i in range(rows):
+        ts = now + i  
+        ap = random.choice(AP_IDS)
+
+        crowd = random.randint(5, 40)
+
+        for d in range(crowd):
+            mac = random_mac()
+            rssi = random.randint(-80, -40)
+
+            batch.append({
+                "ts": ts,
+                "ap_iface": ap,
+                "device": mac,
+                "rssi": rssi
+            })
+
+    accepted = 0
+    for p in batch:
+        try:
+            minute = datetime.utcfromtimestamp(float(p["ts"])).strftime("%Y-%m-%dT%H:%M")
+            db.insert_probe(minute, p["ap_iface"], p["device"], p["rssi"])
+            accepted += 1
+        except Exception as e:
+            print("Error:", e)
+            continue
+
+    db.compute_aggregates()
+
+    return {
+        "generated": len(batch),
+        "accepted": accepted,
+        "location": "simulated",
+        "status": "ok"
+    }
