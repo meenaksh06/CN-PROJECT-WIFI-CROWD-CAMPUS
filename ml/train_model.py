@@ -1,4 +1,3 @@
-
 import argparse
 import pandas as pd
 import joblib
@@ -8,12 +7,12 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import numpy as np
-import math
+
 
 def aggregate(df):
-    df['timestamp'] = pd.to_datetime(df['timestamp']) 
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
     df['minute'] = df['timestamp'].dt.floor('min')
-    agg = df.groupby(['minute','ap_id']).agg(
+    agg = df.groupby(['minute', 'ap_id']).agg(
         probes=('device', 'nunique'),
         mean_rssi=('rssi', 'mean'),
         std_rssi=('rssi', 'std'),
@@ -23,19 +22,20 @@ def aggregate(df):
     agg['std_rssi'] = agg['std_rssi'].fillna(0)
     return agg
 
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument('--data', default='data/sample_probes.csv')
-    p.add_argument('--model', choices=['linear','tree','rf'], default='rf')
+    p.add_argument('--model', choices=['linear', 'tree', 'rf'], default='rf')
     p.add_argument('--out', default='ml/crowd_model.pkl')
     args = p.parse_args()
 
     df = pd.read_csv(args.data)
     agg = aggregate(df)
-    X = agg[['probes','mean_rssi','std_rssi','median_rssi']].fillna(0)
+    X = agg[['probes', 'mean_rssi', 'std_rssi', 'median_rssi']].fillna(0)
     y = agg['ground_truth']
 
-    X_train,X_test,y_train,y_test = train_test_split(X,y,test_size=0.2,random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     if args.model == 'linear':
         model = LinearRegression()
@@ -44,11 +44,11 @@ if __name__ == "__main__":
     else:
         model = RandomForestRegressor(n_estimators=50, random_state=42)
 
-    model.fit(X_train,y_train)
+    model.fit(X_train, y_train)
     preds = model.predict(X_test)
     mse = mean_squared_error(y_test, preds)
     rmse = np.sqrt(mse)
-    mae = mean_absolute_error(y_test,preds)
+    mae = mean_absolute_error(y_test, preds)
     print(f"Model: {args.model} MAE: {mae:.2f} RMSE: {rmse:.2f}")
 
     joblib.dump(model, args.out)
