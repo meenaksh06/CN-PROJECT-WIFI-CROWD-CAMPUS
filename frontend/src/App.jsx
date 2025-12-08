@@ -1,154 +1,336 @@
-import React, { useEffect, useState } from "react";
-import Navbar from "./components/Navbar";
-import Heatmap from "./components/Heatmap";
-import { getDensity } from "./api";
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 
-function Card({ title, value, subtitle }) {
-  return (
-    <div className="bg-[#071123] p-4 rounded-lg shadow border border-gray-800">
-      <div className="text-sm text-gray-300">{title}</div>
-      <div className="text-2xl font-bold mt-1">{value}</div>
-      {subtitle && <div className="text-xs text-gray-400 mt-1">{subtitle}</div>}
-    </div>
-  );
-}
+const API_BASE = 'http://127.0.0.1:8000';
+const POLL_INTERVAL = 8000;
 
-function normalizeItems(rawArray = []) {
-  const items = (rawArray || []).map((r) => ({
-    ap_id: r.ap_id || r.ap_iface || "AP-unknown",
-    unique_devices: Number(r.unique_devices ?? 0),
-    mean_rssi: r.mean_rssi,
-    est_people: Number(
-      typeof r.est_people !== "undefined"
-        ? r.est_people
-        : r.unique_devices
-        ? r.unique_devices / 1.2
-        : 0
-    ),
-  }));
+const LOCATIONS = {
+  main_campus: 'Main Campus',
+  engineering_block: 'Engineering Block', 
+  student_center: 'Student Center',
+  science_block: 'Science Block',
+};
 
-  // sort AP IDs numerically where possible
-  items.sort((a, b) => {
-    const numA = (a.ap_id.match(/\d+/) || [null])[0];
-    const numB = (b.ap_id.match(/\d+/) || [null])[0];
-    if (numA && numB) return Number(numA) - Number(numB);
-    if (numA) return -1;
-    if (numB) return 1;
-    return a.ap_id.localeCompare(b.ap_id);
-  });
-
-  return items;
-}
+let globalIntervalId = null;
 
 export default function App() {
-  const [items, setItems] = useState([]);
+  const [data, setData] = useState([]);
+  const [currentLocation, setCurrentLocation] = useState('main_campus');
   const [loading, setLoading] = useState(true);
-  const [updatedAt, setUpdatedAt] = useState(null);
-  const [error, setError] = useState(null);
-  const [simLoading, setSimLoading] = useState(false); // NEW
+  const [simulating, setSimulating] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [message, setMessage] = useState(null);
+  
+  const isFetching = useRef(false);
 
-  async function fetchDensity() {
+  const showMessage = (text) => {
+    setMessage(text);
+    setTimeout(() => setMessage(null), 2000);
+  };
+
+  const fetchData = useCallback(async () => {
+    if (isFetching.current) return;
+    isFetching.current = true;
+    
     try {
-      setLoading(true);
-      setError(null);
-
-      const res = await getDensity();
-      const payload = res?.data?.data || res?.data || [];
-      const parsed = normalizeItems(payload);
-
-      setItems(parsed);
-      setUpdatedAt(new Date().toLocaleString());
-    } catch (err) {
-      console.error(err);
-      setError(
-        "Could not fetch density from backend. Check backend is running and CORS is enabled."
-      );
-      setItems([]);
+      const res = await fetch(`${API_BASE}/predict`);
+      const json = await res.json();
+      setData(json.data || []);
+      setLastUpdate(new Date().toLocaleTimeString());
+    } catch {
+      console.error('Failed to fetch');
     } finally {
       setLoading(false);
+      isFetching.current = false;
     }
-  }
-
-  async function changeLocation() {
-    try {
-      setSimLoading(true);
-      setError(null);
-
-      await fetch("http://localhost:8000/simulate", {
-        method: "POST",
-      });
-
-      await fetchDensity();
-    } catch (err) {
-      console.error(err);
-      setError("Simulation failed. Check backend logs.");
-    } finally {
-      setSimLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    fetchDensity();
-    const t = setInterval(fetchDensity, 8000);
-    return () => clearInterval(t);
   }, []);
 
-  const total = items.reduce(
-    (acc, it) => acc + (Number(it.est_people) || 0),
-    0
-  );
+  const handleLocationChange = async (e) => {
+    const locationId = e.target.value;
+    if (isFetching.current) return;
+    
+    isFetching.current = true;
+    setLoading(true);
+    
+    try {
+      await fetch(`${API_BASE}/locations/${locationId}`, { method: 'POST' });
+      setCurrentLocation(locationId);
+      showMessage(`Switched to ${LOCATIONS[locationId]}`);
+      isFetching.current = false;
+      await fetchData();
+    } catch {
+      showMessage('Failed to switch');
+      isFetching.current = false;
+      setLoading(false);
+    }
+  };
+
+  const handleSimulate = async () => {
+    if (isFetching.current || simulating) return;
+    
+    setSimulating(true);
+    isFetching.current = true;
+    
+    try {
+      const res = await fetch(`${API_BASE}/simulate`, { method: 'POST' });
+      const json = await res.json();
+      showMessage(`Generated ${json.generated} probes`);
+      isFetching.current = false;
+      await fetchData();
+    } catch {
+      showMessage('Simulation failed');
+      isFetching.current = false;
+    } finally {
+      setSimulating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (globalIntervalId) clearInterval(globalIntervalId);
+    fetchData();
+    globalIntervalId = setInterval(fetchData, POLL_INTERVAL);
+    return () => {
+      if (globalIntervalId) clearInterval(globalIntervalId);
+      globalIntervalId = null;
+    };
+  }, [fetchData]);
+
+  const getColor = (pct) => {
+    if (pct > 75) return '#ef4444';
+    if (pct > 40) return '#f59e0b';
+    return '#22c55e';
+  };
 
   return (
-    <div className="min-h-screen">
-      <Navbar />
-      <div className="max-w-6xl mx-auto p-6">
-        <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card
-            title="Total estimated people"
-            value={loading ? "..." : total.toFixed(1)}
-            subtitle={`Updated: ${updatedAt || "-"}`}
-          />
+    <div style={{ 
+      minHeight: '100vh', 
+      backgroundColor: '#111827', 
+      color: '#f3f4f6',
+      fontFamily: 'system-ui, sans-serif'
+    }}>
+      <header style={{
+        padding: '16px 24px',
+        borderBottom: '1px solid #374151',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+      }}>
+        <h1 style={{ fontSize: '20px', fontWeight: 'bold', margin: 0 }}>
+          WiFi Crowd Campus
+        </h1>
+        <span style={{ fontSize: '14px', color: '#9ca3af' }}>
+          {lastUpdate ? `Updated: ${lastUpdate}` : 'Loading...'}
+        </span>
+      </header>
 
-          <Card
-            title="Zones monitored"
-            value={items.length || "0"}
-            subtitle="Number of APs shown on heatmap"
-          />
+      <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+        {message && (
+          <div style={{
+            position: 'fixed',
+            top: '80px',
+            right: '24px',
+            background: '#1f2937',
+            border: '1px solid #374151',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            fontSize: '14px'
+          }}>
+            {message}
+          </div>
+        )}
 
-          {/* Actions Card */}
-          <div className="bg-[#071123] p-4 rounded-lg border border-gray-800 flex flex-col justify-between">
-            <div>
-              <div className="text-sm text-gray-300">Actions</div>
-              <div className="text-xs text-gray-400 mt-1">
-                Simulate crowd change
-              </div>
-            </div>
+        <div style={{ 
+          display: 'flex', 
+          gap: '12px', 
+          marginBottom: '24px',
+          flexWrap: 'wrap',
+          alignItems: 'center'
+        }}>
+          <select
+            value={currentLocation}
+            onChange={handleLocationChange}
+            disabled={loading || simulating}
+            style={{
+              padding: '10px 16px',
+              backgroundColor: '#1f2937',
+              border: '1px solid #374151',
+              borderRadius: '8px',
+              color: '#f3f4f6',
+              fontSize: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            {Object.entries(LOCATIONS).map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
+          </select>
 
-            <div className="flex gap-2 mt-3">
-              <button
-                onClick={changeLocation}
-                disabled={simLoading}
-                className={`px-3 py-1 rounded text-sm text-white ${
-                  simLoading ? "bg-gray-600" : "bg-blue-600 hover:bg-blue-700"
-                }`}
+          <button
+            onClick={handleSimulate}
+            disabled={loading || simulating}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#3b82f6',
+              border: 'none',
+              borderRadius: '8px',
+              color: 'white',
+              fontSize: '14px',
+              cursor: loading || simulating ? 'not-allowed' : 'pointer',
+              opacity: loading || simulating ? 0.6 : 1
+            }}
+          >
+            {simulating ? 'Simulating...' : 'Simulate Data'}
+          </button>
+
+          {/* <button
+            onClick={fetchData}
+            disabled={loading || simulating}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#374151',
+              border: 'none',
+              borderRadius: '8px',
+              color: 'white',
+              fontSize: '14px',
+              cursor: loading || simulating ? 'not-allowed' : 'pointer',
+              opacity: loading || simulating ? 0.6 : 1
+            }}
+          >
+            Refresh
+          </button> */}
+        </div>
+
+        <h2 style={{ fontSize: '18px', marginBottom: '16px', fontWeight: '600' }}>
+          Zone Heatmap - {LOCATIONS[currentLocation]}
+        </h2>
+
+        {loading && data.length === 0 ? (
+          <p style={{ color: '#9ca3af' }}>Loading...</p>
+        ) : data.length === 0 ? (
+          <p style={{ color: '#9ca3af' }}>No data. Click "Simulate Data" to generate sample data.</p>
+        ) : (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))',
+            gap: '16px'
+          }}>
+            {data.map((zone) => (
+              <div
+                key={zone.ap_id}
+                style={{
+                  backgroundColor: '#1f2937',
+                  border: '1px solid #374151',
+                  borderRadius: '12px',
+                  padding: '20px',
+                  borderLeft: `4px solid ${getColor(zone.occupancy_pct || 0)}`
+                }}
               >
-                {simLoading ? "Simulating..." : "Change Location"}
-              </button>
-            </div>
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  marginBottom: '12px'
+                }}>
+                  <div>
+                    <h3 style={{ 
+                      fontSize: '16px', 
+                      fontWeight: '600',
+                      margin: 0 
+                    }}>
+                      {zone.ap_name || zone.ap_id}
+                    </h3>
+                    <p style={{ 
+                      fontSize: '12px', 
+                      color: '#6b7280',
+                      margin: '4px 0 0 0'
+                    }}>
+                      {zone.ap_id}
+                    </p>
+                  </div>
+                  <span style={{
+                    fontSize: '28px',
+                    fontWeight: 'bold',
+                    color: getColor(zone.occupancy_pct || 0)
+                  }}>
+                    {Math.round(zone.est_people || 0)}
+                  </span>
+                </div>
 
-            {error && <div className="text-sm text-red-400 mt-3">{error}</div>}
+                <div style={{ fontSize: '13px', color: '#9ca3af' }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between',
+                    marginBottom: '6px'
+                  }}>
+                    <span>Occupancy</span>
+                    <span style={{ color: getColor(zone.occupancy_pct || 0) }}>
+                      {Math.round(zone.occupancy_pct || 0)}%
+                    </span>
+                  </div>
+                  <div style={{
+                    height: '6px',
+                    backgroundColor: '#374151',
+                    borderRadius: '3px',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{
+                      width: `${Math.min(zone.occupancy_pct || 0, 100)}%`,
+                      height: '100%',
+                      backgroundColor: getColor(zone.occupancy_pct || 0),
+                      transition: 'width 0.3s'
+                    }} />
+                  </div>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between',
+                    marginTop: '8px'
+                  }}>
+                    <span>Devices: {zone.unique_devices || 0}</span>
+                    <span>Capacity: {zone.capacity || 100}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ 
+          marginTop: '24px',
+          padding: '16px',
+          backgroundColor: '#1f2937',
+          borderRadius: '8px',
+          display: 'flex',
+          gap: '24px',
+          fontSize: '13px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ 
+              width: '12px', 
+              height: '12px', 
+              backgroundColor: '#22c55e',
+              borderRadius: '2px'
+            }} />
+            <span>Low (&lt;40%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ 
+              width: '12px', 
+              height: '12px', 
+              backgroundColor: '#f59e0b',
+              borderRadius: '2px'
+            }} />
+            <span>Medium (40-75%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ 
+              width: '12px', 
+              height: '12px', 
+              backgroundColor: '#ef4444',
+              borderRadius: '2px'
+            }} />
+            <span>High (&gt;75%)</span>
           </div>
         </div>
-
-        <div className="bg-[#071123] rounded-lg border border-gray-800 p-4">
-          <h2 className="text-lg font-semibold mb-2">Heatmap</h2>
-          {loading ? (
-            <div className="p-6 text-gray-400">Loading...</div>
-          ) : (
-            <Heatmap items={items} columns={4} />
-          )}
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
