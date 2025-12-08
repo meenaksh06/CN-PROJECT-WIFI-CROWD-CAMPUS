@@ -1,53 +1,43 @@
-// frontend/src/api.js
-import axios from 'axios';
+const API_BASE = 'http://127.0.0.1:8000';
 
-// Update this if your backend runs on a different host/port
-const API = axios.create({
-  baseURL: 'http://127.0.0.1:8000',
-  timeout: 6000,
-});
-
-/**
- * GET density data.
- * Tries /predict first, then falls back to /counts.
- * Returns the original axios response (so App.jsx can inspect res.data etc).
- */
 export async function getDensity() {
-  try {
-    // primary endpoint
-    const res = await API.get('/predict');
-    return res;
-  } catch (errPredict) {
-    // fallback to /counts (some setups use this)
-    try {
-      const res2 = await API.get('/counts');
-      return res2;
-    } catch (errCounts) {
-      // both failed — throw a meaningful error (caller should catch)
-      console.error('getDensity failed for /predict and /counts', { errPredict, errCounts });
-      throw new Error('Could not fetch density from backend (/predict or /counts).');
-    }
-  }
+  const res = await fetch(`${API_BASE}/predict`);
+  if (!res.ok) throw new Error(`Failed to fetch density: ${res.status}`);
+  return res.json();
 }
 
-/**
- * Optional helper: post an ingest batch for local testing.
- * Example batch:
- * [
- *   {"ts": 1730544000, "ap_iface": "AP-1", "device": "device_001", "rssi": -55}
- * ]
- */
+export async function getLocations() {
+  const res = await fetch(`${API_BASE}/locations`);
+  if (!res.ok) throw new Error(`Failed to fetch locations: ${res.status}`);
+  return res.json();
+}
+
+export async function setLocation(locationId) {
+  const res = await fetch(`${API_BASE}/locations/${locationId}`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to set location: ${res.status}`);
+  return res.json();
+}
+
+export async function simulate(rows = 100) {
+  const res = await fetch(`${API_BASE}/simulate?rows=${rows}`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Simulation failed: ${res.status}`);
+  return res.json();
+}
+
 export async function postIngest(batch = []) {
-  try {
-    const res = await API.post('/ingest', batch);
-    return res;
-  } catch (err) {
-    console.error('postIngest error', err);
-    throw err;
-  }
+  const res = await fetch(`${API_BASE}/ingest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(batch),
+  });
+  if (!res.ok) throw new Error(`Ingest failed: ${res.status}`);
+  return res.json();
 }
 
-export default {
-  getDensity,
-  postIngest,
-};
+export async function checkHealth() {
+  const res = await fetch(`${API_BASE}/health`);
+  if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
+  return res.json();
+}
+
+export default { getDensity, getLocations, setLocation, simulate, postIngest, checkHealth };
